@@ -35,6 +35,7 @@ class TransferProps:
     env: str
     portal_auth: Tuple[str, str]
     context: Context
+    delete_source_files: bool
     terra_api_url: str = 'https://workspace.dsde-prod.broadinstitute.org'
     session: Optional[AuthorizedSession] = None
     source_sas_token: Optional[str] = None
@@ -112,7 +113,8 @@ def portal_is_indexing(props: TransferProps) -> bool:
 
 def get_files_to_transfer(props: TransferProps) -> list[File]:
     path = f'{props.context.portal_api_url}/search/?type=File&audit.INTERNAL_ACTION.category=incorrect+anvil+workspace&field=@id&field=anvil_source_url&field=anvil_destination_url&field=upload_status&limit=all'
-    files = requests.get(path, auth=props.portal_auth).json()
+    files = requests.get(path, auth=props.portal_auth).json()['@graph']
+    print(f'Got {len(files)} files to transfer')
     return [
         File(
             id_=item['@id'],
@@ -120,31 +122,64 @@ def get_files_to_transfer(props: TransferProps) -> list[File]:
             anvil_destination_url=item['anvil_destination_url'],
             upload_status=item['upload_status']
         )
-        for item in files['@graph']
+        for item in files
     ]
 
 
-def file_exists():
+def copy_file_from_source_to_destination(props, file_):
+    print(f'Copying {file_.id_}')
+    destination_blob = BlobClient.from_blob_url(
+        f'{file_.anvil_destination_url}?{props.destination_sas_token}'
+    )
+    response = destination_blob.start_copy_from_url(
+        f'{file_.anvil_source_url}?{props.source_sas_token}',
+        requires_sync=True,
+    )
+    if response['copy_status'] != 'success':
+        raise ValueError(f'Copying file {file_.id_} failed: {response}')
+
+
+def file_exists(file_url_with_sas: str) -> bool:
+    blob_client = BlobClient.from_blob_url(file_url_with_sas)
+    return blob_client.exists()
+
+
+def patch_upload_status_deposited(props: TransferProps, file_: File) -> None:
+    response = requests.patch(f'{props.context.portal_api_url}{file_.id_}', json={'upload_status': 'deposited'}, auth=props.portal_auth)
+    if response.status_code != 200:
+        raise ValueError(f'Error patching upload_status: deposited on file {file_.id_} {response.json()}')
+
+
+def delete_file(file_url_with_sas: str) -> bool:
     pass
 
 
-def copy_between_azure_buckets():
-    pass
+def maybe_delete_source_file(props: TransferProps, file_: File) -> None:
+    if not props.delete_source_files:
+        print('Not deleting source file')
+        return
+    print('Deleting source file {file_._id} {file_.anvil_source_url}')
+    delete_file(f'{file_.anvil_source_url}?{props.source_sas_token}')
 
 
-def patch_upload_status_deposited():
-    pass
-
-
-def delete_source_file():
-    pass
+def transfer_files(props: TransferProps):
+    files = get_files_to_transfer(props)
+    for file_ in files:
+        if not file_exists(f'{file_.anvil_source_url}?{props.source_sas_token}'):
+            print(f'File {file_.id_} source URL {file_.anvil_source_url} does not exist. Has it been submitted yet? Skipping!')
+            continue
+        copy_file_from_source_to_destination(props, file_)
+        maybe_delete_source_file(props, file_)
+        patch_upload_status_deposited(props, file_)
 
 
 def transfer(props: TransferProps):
-    print(portal_is_indexing(props))
-    files = get_files_to_transfer(props)
-    print(files)
-    return
+    if portal_is_indexing(props):
+        print('Portal is indexing, will try again later.')
+        return
+    else:
+        print('Portal not indexing')
+    transfer_files(props)
 
 
 def get_args():
@@ -153,6 +188,7 @@ def get_args():
     parser.add_argument('--google-service-account-credentials-base64', required=True, type=str, help='Google service account credentials linked to Terra workspace, base64 encoded')
     parser.add_argument('--portal-key', required=True, type=str, help='Portal key associated with Anvil Transfer service account user')
     parser.add_argument('--portal-secret-key', required=True, type=str, help='Portal secret key associated with Anvil Transfer service account user')
+    parser.add_argument('--delete-source-files', action='store_true', help='Delete source files after copying')
     return parser.parse_args()
 
 
@@ -162,10 +198,9 @@ if __name__ == '__main__':
         google_service_account_credentials=json.loads(base64.b64decode(args.google_service_account_credentials_base64).decode('utf-8')),
         env=args.env,
         context=ENVIRONMENT[args.env],
-        portal_auth=(args.portal_key, args.portal_secret_key)
+        portal_auth=(args.portal_key, args.portal_secret_key),
+        delete_source_files=args.delete_source_files,
     )
     init_session(props)
     init_sas_tokens(props)
     transfer(props)
-
-#deposited
