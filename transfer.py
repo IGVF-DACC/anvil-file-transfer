@@ -1,10 +1,12 @@
+import argparse
+
 import base64
 
 import json
 
 import os
 
-import argparse
+import requests # type: ignore
 
 from google.auth.transport.requests import AuthorizedSession
 
@@ -15,11 +17,12 @@ from azure.storage.blob import BlobClient
 from dataclasses import dataclass
 
 from typing import Optional
+from typing import Tuple
 
 
 @dataclass
 class Context:
-    base_url: str
+    portal_api_url: str
     source_workspace_id: str
     destination_workspace_id: str
     source_storage_resource_id: str
@@ -30,27 +33,32 @@ class Context:
 class TransferProps:
     google_service_account_credentials: dict[str, str]
     env: str
-    portal_key: str
-    portal_secret_key: str
+    portal_auth: Tuple[str, str]
     context: Context
     terra_api_url: str = 'https://workspace.dsde-prod.broadinstitute.org'
     session: Optional[AuthorizedSession] = None
-    source_base_url: Optional[str] = None
     source_sas_token: Optional[str] = None
-    destination_base_url: Optional[str] = None
     destination_sas_token: Optional[str] = None
+
+
+@dataclass
+class File:
+    id_: str
+    anvil_source_url: str
+    anvil_destination_url: str
+    upload_status: str
 
 
 ENVIRONMENT = {
     'sandbox': Context(
-        base_url='https://api.data.igvf.org',
+        portal_api_url='https://api.sandbox.igvf.org',
         source_workspace_id='0f7ac85e-9aef-482c-9fb1-73c14877c2f8',
         destination_workspace_id='7d3c9ef1-99c2-4948-9811-fe79d626219f',
         source_storage_resource_id='33cc593d-bd19-4d1b-8bd4-7891a71293fb',
         destination_storage_resource_id='d72ebb65-b7a9-4ebe-9815-3fe948715498',
     ),
     'prod': Context(
-        base_url='https://api.sandbox.igvf.org',
+        portal_api_url='https://api.data.igvf.org',
         source_workspace_id='3201e576-2410-4dd8-9799-cb5e431333ae',
         destination_workspace_id='b7c48e0a-02df-4e12-b026-4070c017359e',
         source_storage_resource_id='14be87fd-0130-4064-85b8-dceb8972ab11',
@@ -94,14 +102,48 @@ def get_destination_sas_token(props: TransferProps) -> dict[str, str]:
 
 
 def init_sas_tokens(props: TransferProps) -> None:
-    props.source_base_url, props.source_sas_token = get_source_sas_token(props)['url'].split('?')
-    props.destination_base_url, props.destination_sas_token = get_destination_sas_token(props)['url'].split('?')
+    props.source_sas_token = get_source_sas_token(props)['token']
+    props.destination_sas_token = get_destination_sas_token(props)['token']
+
+
+def portal_is_indexing(props: TransferProps) -> bool:
+    return requests.get(f'{props.context.portal_api_url}/indexer-info').json()['is_indexing']
+
+
+def get_files_to_transfer(props: TransferProps) -> list[File]:
+    path = f'{props.context.portal_api_url}/search/?type=File&audit.INTERNAL_ACTION.category=incorrect+anvil+workspace&field=@id&field=anvil_source_url&field=anvil_destination_url&field=upload_status&limit=all'
+    files = requests.get(path, auth=props.portal_auth).json()
+    return [
+        File(
+            id_=item['@id'],
+            anvil_source_url=item['anvil_source_url'],
+            anvil_destination_url=item['anvil_destination_url'],
+            upload_status=item['upload_status']
+        )
+        for item in files['@graph']
+    ]
+
+
+def file_exists():
+    pass
+
+
+def copy_between_azure_buckets():
+    pass
+
+
+def patch_upload_status_deposited():
+    pass
+
+
+def delete_source_file():
+    pass
 
 
 def transfer(props: TransferProps):
-    init_session(props)
-    init_sas_tokens(props)
-    print(props)
+    print(portal_is_indexing(props))
+    files = get_files_to_transfer(props)
+    print(files)
     return
 
 
@@ -120,8 +162,10 @@ if __name__ == '__main__':
         google_service_account_credentials=json.loads(base64.b64decode(args.google_service_account_credentials_base64).decode('utf-8')),
         env=args.env,
         context=ENVIRONMENT[args.env],
-        portal_key=args.portal_key,
-        portal_secret_key=args.portal_secret_key,
+        portal_auth=(args.portal_key, args.portal_secret_key)
     )
+    init_session(props)
+    init_sas_tokens(props)
     transfer(props)
 
+#deposited
