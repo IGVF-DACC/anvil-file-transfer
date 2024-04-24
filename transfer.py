@@ -150,8 +150,9 @@ def patch_upload_status_deposited(props: TransferProps, file_: File) -> None:
         raise ValueError(f'Error patching upload_status: deposited on file {file_.id_} {response.json()}')
 
 
-def delete_file(file_url_with_sas: str) -> bool:
-    pass
+def delete_file(file_url_with_sas: str) -> None:
+    blob_client = BlobClient.from_blob_url(file_url_with_sas)
+    blob_client.delete_blob()
 
 
 def maybe_delete_source_file(props: TransferProps, file_: File) -> None:
@@ -169,8 +170,8 @@ def transfer_files(props: TransferProps):
             print(f'File {file_.id_} source URL {file_.anvil_source_url} does not exist. Has it been submitted yet? Skipping!')
             continue
         copy_file_from_source_to_destination(props, file_)
-        maybe_delete_source_file(props, file_)
         patch_upload_status_deposited(props, file_)
+        maybe_delete_source_file(props, file_)
 
 
 def transfer(props: TransferProps):
