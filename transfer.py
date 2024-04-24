@@ -145,6 +145,7 @@ def file_exists(file_url_with_sas: str) -> bool:
 
 
 def patch_upload_status_deposited(props: TransferProps, file_: File) -> None:
+    print(f'Patching file {file_.id_} to upload_status: deposited')
     response = requests.patch(f'{props.context.portal_api_url}{file_.id_}', json={'upload_status': 'deposited'}, auth=props.portal_auth)
     if response.status_code != 200:
         raise ValueError(f'Error patching upload_status: deposited on file {file_.id_} {response.json()}')
