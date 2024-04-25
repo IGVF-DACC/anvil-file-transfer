@@ -31,7 +31,6 @@ class Context:
 
 @dataclass
 class TransferProps:
-    google_service_account_credentials: dict[str, str]
     env: str
     portal_auth: Tuple[str, str]
     context: Context
@@ -44,7 +43,7 @@ class TransferProps:
 
 @dataclass
 class File:
-    id_: str
+    unique_id: str
     anvil_source_url: str
     anvil_destination_url: str
     upload_status: str
@@ -68,15 +67,15 @@ ENVIRONMENT = {
 }
 
 
-def init_session(props: TransferProps) -> None:
+def get_session(google_service_account_credentials) -> AuthorizedSession:
     service_account_credentials = service_account.Credentials.from_service_account_info(
-        props.google_service_account_credentials,
+        google_service_account_credentials,
         scopes=[
             'https://www.googleapis.com/auth/userinfo.profile',
             'https://www.googleapis.com/auth/userinfo.email'
         ]
     )
-    props.session = AuthorizedSession(service_account_credentials)
+    return AuthorizedSession(service_account_credentials)
 
 
 def get_sas_token(terra_api_url, session, workspace_id, resource_id, expiration=28800) -> dict[str, str]:
@@ -117,7 +116,7 @@ def get_files_to_transfer(props: TransferProps) -> list[File]:
     print(f'Got {len(files)} files to transfer')
     return [
         File(
-            id_=item['@id'],
+            unique_id=item['@id'],
             anvil_source_url=item['anvil_source_url'],
             anvil_destination_url=item['anvil_destination_url'],
             upload_status=item['upload_status']
@@ -126,17 +125,17 @@ def get_files_to_transfer(props: TransferProps) -> list[File]:
     ]
 
 
-def copy_file_from_source_to_destination(props, file_):
-    print(f'Copying {file_.id_}')
+def copy_file_from_source_to_destination(props, f):
+    print(f'Copying {f.unique_id} to {f.anvil_destination_url}')
     destination_blob = BlobClient.from_blob_url(
-        f'{file_.anvil_destination_url}?{props.destination_sas_token}'
+        f'{f.anvil_destination_url}?{props.destination_sas_token}'
     )
     response = destination_blob.start_copy_from_url(
-        f'{file_.anvil_source_url}?{props.source_sas_token}',
+        f'{f.anvil_source_url}?{props.source_sas_token}',
         requires_sync=True,
     )
     if response['copy_status'] != 'success':
-        raise ValueError(f'Copying file {file_.id_} failed: {response}')
+        raise ValueError(f'Copying file {f.unique_id} failed: {response}')
 
 
 def file_exists(file_url_with_sas: str) -> bool:
@@ -144,11 +143,11 @@ def file_exists(file_url_with_sas: str) -> bool:
     return blob_client.exists()
 
 
-def patch_upload_status_deposited(props: TransferProps, file_: File) -> None:
-    print(f'Patching file {file_.id_} to upload_status: deposited')
-    response = requests.patch(f'{props.context.portal_api_url}{file_.id_}', json={'upload_status': 'deposited'}, auth=props.portal_auth)
+def patch_upload_status_deposited(props: TransferProps, f: File) -> None:
+    print(f'Patching file {f.unique_id} to upload_status: deposited')
+    response = requests.patch(f'{props.context.portal_api_url}{f.unique_id}', json={'upload_status': 'deposited'}, auth=props.portal_auth)
     if response.status_code != 200:
-        raise ValueError(f'Error patching upload_status: deposited on file {file_.id_} {response.json()}')
+        raise ValueError(f'Error patching upload_status: deposited on file {f.unique_id} {response.json()}')
 
 
 def delete_file(file_url_with_sas: str) -> None:
@@ -156,23 +155,23 @@ def delete_file(file_url_with_sas: str) -> None:
     blob_client.delete_blob()
 
 
-def maybe_delete_source_file(props: TransferProps, file_: File) -> None:
+def maybe_delete_source_file(props: TransferProps, f: File) -> None:
     if not props.delete_source_files:
         print('Not deleting source file')
         return
-    print('Deleting source file {file_._id} {file_.anvil_source_url}')
-    delete_file(f'{file_.anvil_source_url}?{props.source_sas_token}')
+    print('Deleting source file {f._id} {f.anvil_source_url}')
+    delete_file(f'{f.anvil_source_url}?{props.source_sas_token}')
 
 
 def transfer_files(props: TransferProps):
     files = get_files_to_transfer(props)
-    for file_ in files:
-        if not file_exists(f'{file_.anvil_source_url}?{props.source_sas_token}'):
-            print(f'File {file_.id_} source URL {file_.anvil_source_url} does not exist. Has it been submitted yet? Skipping!')
+    for f in files:
+        if not file_exists(f'{f.anvil_source_url}?{props.source_sas_token}'):
+            print(f'File {f.unique_id} source URL {f.anvil_source_url} does not exist. Has it been submitted yet? Skipping!')
             continue
-        copy_file_from_source_to_destination(props, file_)
-        patch_upload_status_deposited(props, file_)
-        maybe_delete_source_file(props, file_)
+        copy_file_from_source_to_destination(props, f)
+        patch_upload_status_deposited(props, f)
+        maybe_delete_source_file(props, f)
 
 
 def transfer(props: TransferProps):
@@ -187,7 +186,7 @@ def transfer(props: TransferProps):
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--env', type=str, choices=['sandbox', 'prod'], required=True, help='Specify the environment: prod or sandbox.')
-    parser.add_argument('--google-service-account-credentials-base64', required=True, type=str, help='Google service account credentials linked to Terra workspace, base64 encoded')
+    parser.add_argument('--google-service-account-credentials-base64', required=True, type=str, help='Google service account credentials linked to Terra workspace, base64 encoded') # base64 to prevent weirdness with storing JSON in environment variable
     parser.add_argument('--portal-key', required=True, type=str, help='Portal key associated with Anvil Transfer service account user')
     parser.add_argument('--portal-secret-key', required=True, type=str, help='Portal secret key associated with Anvil Transfer service account user')
     parser.add_argument('--delete-source-files', action='store_true', help='Delete source files after copying')
@@ -196,13 +195,13 @@ def get_args():
 
 if __name__ == '__main__':
     args = get_args()
+    google_service_account_credentials = json.loads(base64.b64decode(args.google_service_account_credentials_base64).decode('utf-8')) # decode base64 back to JSON
     props = TransferProps(
-        google_service_account_credentials=json.loads(base64.b64decode(args.google_service_account_credentials_base64).decode('utf-8')),
         env=args.env,
+        session=get_session(google_service_account_credentials),
         context=ENVIRONMENT[args.env],
         portal_auth=(args.portal_key, args.portal_secret_key),
         delete_source_files=args.delete_source_files,
     )
-    init_session(props)
     init_sas_tokens(props)
     transfer(props)
