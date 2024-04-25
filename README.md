@@ -19,3 +19,12 @@ options:
   --delete-source-files
                         Delete source files after copying
 ```
+
+If you downloaded Google service account key as JSON you can convert to base64:
+
+```python
+import base64
+import json
+
+base64.b64encode(json.dumps(credential_dict).encode('utf-8')).decode('utf-8')
+```
