@@ -159,7 +159,7 @@ def maybe_delete_source_file(props: TransferProps, f: File) -> None:
     if not props.delete_source_files:
         print('Not deleting source file')
         return
-    print('Deleting source file {f._id} {f.anvil_source_url}')
+    print('Deleting source file {f.unique_id} {f.anvil_source_url}')
     delete_file(f'{f.anvil_source_url}?{props.source_sas_token}')
 
 
