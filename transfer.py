@@ -32,11 +32,11 @@ class Context:
 @dataclass
 class TransferProps:
     env: str
-    portal_auth: Tuple[str, str]
     context: Context
+    session: AuthorizedSession
+    portal_auth: Tuple[str, str]
     delete_source_files: bool
     terra_api_url: str = 'https://workspace.dsde-prod.broadinstitute.org'
-    session: Optional[AuthorizedSession] = None
     source_sas_token: Optional[str] = None
     destination_sas_token: Optional[str] = None
 
